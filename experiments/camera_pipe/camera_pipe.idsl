@@ -1,0 +1,235 @@
+//****************************************************************************//
+//* Copyright (c) 2016, NVIDIA CORPORATION. All rights reserved.             *//
+//*                                                                          *//
+//* Redistribution and use in source and binary forms, with or without       *//
+//* modification, are permitted provided that the following conditions       *//
+//* are met:                                                                 *//
+//*  * Redistributions of source code must retain the above copyright        *//
+//*    notice, this list of conditions and the following disclaimer.         *//
+//*  * Redistributions in binary form must reproduce the above copyright     *//
+//*    notice, this list of conditions and the following disclaimer in the   *//
+//*    documentation and/or other materials provided with the distribution.  *//
+//*  * Neither the name of NVIDIA CORPORATION nor the names of its           *//
+//*    contributors may be used to endorse or promote products derived       *//
+//*    from this software without specific prior written permission.         *//
+//*                                                                          *//
+//* THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY     *//
+//* EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE        *//
+//* IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR       *//
+//* PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR        *//
+//* CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,    *//
+//* EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,      *//
+//* PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR       *//
+//* PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY      *//
+//* OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT             *//
+//* (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE    *//
+//* OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.     *//
+//****************************************************************************//
+
+/// This example is derived from camera_pipe apps in Halide : http://halide-lang.org/
+
+struct rgb {
+  int16 r;
+  int16 g;
+  int16 b;
+}
+
+struct rgb8 {
+  int8 r;
+  int8 g;
+  int8 b;
+}
+
+struct correct_vals{
+  int16 r_gr;
+  int16 r_r;
+  int16 r_b;
+  int16 r_gb;
+  int16 g_gr;
+  int16 g_r;
+  int16 g_b;
+  int16 g_gb;
+  int16 b_gr;
+  int16 b_r;
+  int16 b_b;
+  int16 b_gb;
+}
+
+
+stencil hot_pixel_suppression(vector#2 int16 A) {
+  a = max(max(A@[0, -2], A@[0, 2]),
+          max(A@[-2, 0], A@[2, 0]));
+  b = min(min(A@[0, -2], A@[0, 2]),
+          min(A@[-2, 0], A@[2, 0]));
+  c = (A < b ? b : A);
+  d = (c > a ? a : c);
+  return d;
+}
+
+stencil compute_m(vector#2 float m_3200, vector#2 float m_7000, float kelvin){
+  alpha = ( (1.0f / kelvin) - (1.0f/3200.0f) ) / ( (1.0f/7000.0f - 1.0f/3200.0f) );
+  val = (m_3200 * alpha + m_7000 * ( 1.0f - alpha )) * 256.0f ;
+  return cast<int>(val);
+}
+
+
+stencil color_correct(vector#2 int16 red, vector#2 int16 green, vector#2 int16 blue, vector#2 int m){
+  r_int = cast<int>(red);
+  gr_int = cast<int>(green);
+  b_int = cast<int>(blue);
+
+  r = m[0,3] + m[0,0]*r_int + m[0,1]*gr_int + m[0,2]*b_int;
+  g = m[1,3] + m[1,0]*r_int + m[1,1]*gr_int + m[1,2]*b_int;
+  b = m[2,3] + m[2,0]*r_int + m[2,1]*gr_int + m[2,2]*b_int;
+
+  r0 = cast<int8>(r / 256);
+  g0 = cast<int8>(g / 256);
+  b0 = cast<int8>(b / 256);
+
+  return struct rgb8(r0, g0, b0);
+}
+
+
+stencil correct(vector#2 int16 A) {
+   
+  g_gr = A@[(0,2),(0,2)];
+  r_r = A@[(0,2),(1,2)];
+  b_b = A@[(1,2),(0,2)];
+  g_gb = A@[(1,2),(1,2)];
+
+  g_grxp1 = A@[(0,2),(2,2)];
+  g_grxm1 = A@[(0,2),(-2,2)];
+  g_gryp1xp1 = A@[(2,2),(2,2)];
+  g_gryp1 = A@[(2,2),(0,2)];
+  g_gryp1xm1 = A@[(2,2),(-2,2)];
+  g_grym1 = A@[(-2,2),(0,2)];
+  g_grym1xp1 = A@[(-2,2),(2,2)];
+
+  r_rxm1 = A@[(0,2),(-1,2)];
+  r_ryp1 = A@[(2,2),(1,2)];
+  r_ryp1xm1 = A@[(2,2),(-1,2)];
+
+  b_bym1 = A@[(-1,2),(0,2)];
+  b_bxp1 = A@[(1,2),(2,2)];
+  b_bym1xp1 = A@[(-1,2),(2,2)];
+
+  g_gbym1 = A@[(-1,2),(1,2)];
+  g_gbxm1 = A@[(1,2),(-1,2)];
+  g_gbym1xm1 = A@[(-1,2),(-1,2)];
+  g_gbyp1 = A@[(3,2),(1,2)];
+  g_gbyp1xm1 = A@[(3,2),(-1,2)];
+  g_gbxp1 = A@[(1,2),(3,2)];
+  g_gbym1xp1 = A@[(-1,2),(3,2)];
+
+  gv_r = (g_gbym1 + g_gb + 1) / 2;
+  gvd_r = abs(g_gbym1 - g_gb);
+  gh_r = (g_grxp1 + g_gr + 1) / 2;
+  ghd_r = abs(g_grxp1 - g_gr);
+  g_r = (ghd_r < gvd_r ? gh_r : gv_r);
+
+  gv_rxm1 = (g_gbym1xm1 + g_gbxm1 + 1) / 2;
+  gvd_rxm1 = abs(g_gbym1xm1 - g_gbxm1);
+  gh_rxm1 = (g_gr + g_grxm1 + 1) / 2;
+  ghd_rxm1 = abs(g_gr - g_grxm1);
+  g_rxm1 = (ghd_rxm1 < gvd_rxm1 ? gh_rxm1 : gv_rxm1);
+
+  gv_ryp1 = (g_gb + g_gbyp1 + 1) / 2;
+  gvd_ryp1 = abs(g_gb - g_gbyp1);
+  gh_ryp1 = (g_gryp1xp1 + g_gryp1 + 1) / 2;
+  ghd_ryp1 = abs(g_gryp1xp1 - g_gryp1);
+  g_ryp1 = (ghd_ryp1 < gvd_ryp1 ? gh_ryp1 : gv_ryp1);
+
+  gv_ryp1xm1 = ( g_gbxm1 + g_gbyp1xm1 + 1) / 2;
+  gvd_ryp1xm1 = abs(g_gbxm1 - g_gbyp1xm1);
+  gh_ryp1xm1 = (g_gryp1 + g_gryp1xm1 + 1) / 2;
+  ghd_ryp1xm1 = abs(g_gryp1 - g_gryp1xm1);
+  g_ryp1xm1 = (ghd_ryp1xm1 < gvd_ryp1xm1 ? gh_ryp1xm1 : gv_ryp1xm1);
+
+  gv_b = (g_gryp1 + g_gr +1) / 2;
+  gvd_b = abs(g_gryp1 - g_gr);
+  gh_b = (g_gbxm1 + g_gb + 1) / 2;
+  ghd_b = abs(g_gbxm1 - g_gb);
+  g_b = (ghd_b < gvd_b ? gh_b : gv_b);
+
+  gv_bym1 = (g_gr + g_grym1 +1) / 2;
+  gvd_bym1 = abs(g_gr - g_grym1);
+  gh_bym1 = (g_gbym1xm1 + g_gbym1 + 1) / 2;
+  ghd_bym1 = abs(g_gbym1xm1 - g_gbym1);
+  g_bym1 = (ghd_bym1 < gvd_bym1 ? gh_bym1 : gv_bym1);
+
+  gv_bxp1 = (g_gryp1xp1 + g_grxp1 +1) / 2;
+  gvd_bxp1 = abs(g_gryp1xp1 - g_grxp1);
+  gh_bxp1 = (g_gb + g_gbxp1 + 1) / 2;
+  ghd_bxp1 = abs(g_gb - g_gbxp1);
+  g_bxp1 = (ghd_bxp1 < gvd_bxp1 ? gh_bxp1 : gv_bxp1);
+
+  gv_ym1xp1 = (g_grxp1 + g_grym1xp1 + 1) / 2;
+  gvd_ym1xp1 = abs(g_grxp1 - g_grym1xp1);
+  gh_ym1xp1 = (g_gbym1 + g_gbym1xp1 + 1) / 2;
+  ghd_ym1xp1 = abs(g_gbym1 - g_gbym1xp1);
+  g_bym1xp1 = (ghd_ym1xp1 < gvd_ym1xp1 ? gh_ym1xp1 : gv_ym1xp1);
+
+  correction_r_gr = g_gr - (g_r + g_rxm1 + 1) / 2;
+  r_gr = correction_r_gr + (r_rxm1 + r_r + 1) / 2;
+
+  correction_b_gr = g_gr - (g_b + g_bym1 + 1) / 2;
+  b_gr = correction_b_gr + (b_b + b_bym1 + 1) / 2;
+
+  correction_r_gb = g_gb - (g_r + g_ryp1 + 1) / 2;
+  r_gb = correction_r_gb + (r_r + r_ryp1 + 1) / 2;
+
+  correction_b_gb = g_gb - (g_b + g_bxp1 + 1) / 2;
+  b_gb = correction_b_gb + (b_b + b_bxp1 + 1) / 2;
+
+  correction_r_b_0 = g_b - (g_r + g_ryp1xm1 + 1) / 2;
+  rp_b = correction_r_b_0 + (r_r + r_ryp1xm1 + 1) / 2;
+  rpd_b = abs(r_r - r_ryp1xm1);
+  correction_r_b_1 = g_b - (g_rxm1 + g_ryp1 +  1) / 2;
+  rn_b = correction_r_b_1 + (r_rxm1 + r_ryp1 + 1) / 2;
+  rnd_b = abs(r_rxm1 - r_ryp1);
+  r_b = (rpd_b < rnd_b ? rp_b : rn_b);
+
+  correction_b_r_0 = g_r - (g_b + g_bym1xp1 + 1) / 2;
+  bp_r = correction_b_r_0 + (b_b + b_bym1xp1 + 1) / 2;
+  bpd_r = abs(b_b - b_bym1xp1);
+  correction_b_r_1 = g_r - (g_bxp1 + g_bym1 +1) / 2;
+  bn_r = correction_b_r_1 + (b_bxp1 + b_bym1 +1) / 2;
+  bnd_r = abs(b_bxp1 - b_bym1);
+  b_r = (bpd_r < bnd_r ? bp_r : bn_r);
+
+  return struct correct_vals(r_gr, r_r, r_b, r_gb, g_gr, g_r, g_b, g_gb, b_gr, b_r, b_b, b_gb);
+}
+
+
+vector demosaic(vector#2 int16 A, vector#2 float m_3200, vector#2 float m_7000, float kelvin) {
+
+  all_correct = correct(A);
+
+  red = (@[(0,2), (0,2)] = all_correct.r_gr;
+         @[(0,2), (1,2)] = all_correct.r_r;
+         @[(1,2), (0,2)] = all_correct.r_b;
+         @[(1,2), (1,2)] = all_correct.r_gb;);
+  green = (@[(0,2), (0,2)] = all_correct.g_gr;
+           @[(0,2), (1,2)] = all_correct.g_r;
+           @[(1,2), (0,2)] = all_correct.g_b;
+           @[(1,2), (1,2)] = all_correct.g_gb;);
+  blue = (@[(0,2), (0,2)] = all_correct.b_gr;
+          @[(0,2), (1,2)] = all_correct.b_r;
+          @[(1,2), (0,2)] = all_correct.b_b;
+          @[(1,2), (1,2)] = all_correct.b_gb;);
+
+  m = compute_m(m_3200,m_7000,kelvin);	  
+
+  return color_correct(red,green,blue,m);
+}
+
+vector#2 int16 input[1958,2578];
+vector#2 float m_3200[3,4];
+vector#2 float m_7000[3,4];
+
+float color_temp;
+float gamma;
+float contrast;
+
+denoised = hot_pixel_suppression(input);
+return demosaic(denoised,m_3200,m_7000,color_temp);

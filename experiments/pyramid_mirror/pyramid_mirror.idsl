@@ -1,0 +1,76 @@
+//****************************************************************************//
+//* Copyright (c) 2016, NVIDIA CORPORATION. All rights reserved.             *//
+//*                                                                          *//
+//* Redistribution and use in source and binary forms, with or without       *//
+//* modification, are permitted provided that the following conditions       *//
+//* are met:                                                                 *//
+//*  * Redistributions of source code must retain the above copyright        *//
+//*    notice, this list of conditions and the following disclaimer.         *//
+//*  * Redistributions in binary form must reproduce the above copyright     *//
+//*    notice, this list of conditions and the following disclaimer in the   *//
+//*    documentation and/or other materials provided with the distribution.  *//
+//*  * Neither the name of NVIDIA CORPORATION nor the names of its           *//
+//*    contributors may be used to endorse or promote products derived       *//
+//*    from this software without specific prior written permission.         *//
+//*                                                                          *//
+//* THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY     *//
+//* EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE        *//
+//* IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR       *//
+//* PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR        *//
+//* CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,    *//
+//* EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,      *//
+//* PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR       *//
+//* PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY      *//
+//* OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT             *//
+//* (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE    *//
+//* OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.     *//
+//****************************************************************************//
+stencil downx(vector#2 float X){
+  return  0.0625f * X@[(-2,2),(0,1)] +  0.25f * X@[(-1,2),(0,1)] +  0.375f * X@[(0,2),(0,1)] + 0.25f * X@[(1,2),(0,1)] +  0.0625f * X@[(2,2),(0,1)];
+}
+stencil downy(vector#2 float Y){
+  return 0.0625f * Y@[(0,1),(-2,2)] + 0.25f * Y@[(0,1),(-1,2)] + 0.375f * Y@[(0,1),(0,2)] + 0.25f * Y@[(0,1),(1,2)] + 0.0625f * Y@[(0,1),(2,2)] ;
+}
+vector downsample(vector#2 float X){
+       return downy(downx(X:mirror):mirror);
+}
+stencil upx_even(vector#2 float X){
+  return X@[-1,0] * 0.3125f + X * 0.625f + X@[1,0] * 0.0625f;
+}
+stencil upx_odd(vector#2 float X){
+  return X@[-1,0] * 0.0625f + X * 0.625f +  X@[1,0] * 0.3125f;
+}
+vector upx(vector#2 float X){
+       return ( @[(0,2),(0,1)] = upx_even(X:mirror);
+                @[(1,2),(0,1)] = upx_odd(X:mirror); );
+}
+stencil upy_even(vector#2 float X){
+  return X@[0,-1] * 0.3125f + X * 0.625f + X@[0,1] * 0.0625f;
+}
+stencil upy_odd(vector#2 float X){
+  return X@[0,-1] * 0.0625f + X * 0.625f +  X@[0,1] * 0.3125f ;
+}
+vector upy(vector#2 float Y){
+       return ( @[(0,1),(0,2)] = upy_even(Y:mirror);
+                @[(0,1),(1,2)] = upy_odd(Y:mirror); );
+}
+vector upsample(vector#2 float X){
+       return upy(upx(X));
+}
+stencil laplacian(vector#2 float X, vector#2 float Y){
+	return X - Y;
+}
+stencil sum(vector#2 float X, vector#2 float Y){
+	return X+Y;
+}
+vector#2 float input[512,512];
+gpyramid<0> = input;
+for i = 1..4
+    gpyramid<i> = downsample(gpyramid<i-1>);
+    lpyramid<i> = laplacian(gpyramid<i-1>,upsample(gpyramid<i>));
+endfor
+outpyramid<4> = gpyramid<4>;
+for j = 3..0
+    outpyramid<j> = sum(upsample(outpyramid<j+1>),lpyramid<j+1>);
+endfor
+return outpyramid<0>;

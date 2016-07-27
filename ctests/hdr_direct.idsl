@@ -1,0 +1,71 @@
+//****************************************************************************//
+//* Copyright (c) 2016, NVIDIA CORPORATION. All rights reserved.             *//
+//*                                                                          *//
+//* Redistribution and use in source and binary forms, with or without       *//
+//* modification, are permitted provided that the following conditions       *//
+//* are met:                                                                 *//
+//*  * Redistributions of source code must retain the above copyright        *//
+//*    notice, this list of conditions and the following disclaimer.         *//
+//*  * Redistributions in binary form must reproduce the above copyright     *//
+//*    notice, this list of conditions and the following disclaimer in the   *//
+//*    documentation and/or other materials provided with the distribution.  *//
+//*  * Neither the name of NVIDIA CORPORATION nor the names of its           *//
+//*    contributors may be used to endorse or promote products derived       *//
+//*    from this software without specific prior written permission.         *//
+//*                                                                          *//
+//* THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY     *//
+//* EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE        *//
+//* IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR       *//
+//* PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR        *//
+//* CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,    *//
+//* EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,      *//
+//* PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR       *//
+//* PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY      *//
+//* OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT             *//
+//* (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE    *//
+//* OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.     *//
+//****************************************************************************//
+struct rgb { double r ; double g ; double b; }
+stencil make_grey(vector#2 rgb X){
+  return (0.02126 * X.r + 0.7152 * X.g + 0.0722 * X.b) / 255;
+}
+stencil laplacian(vector#2 double X){
+  return 4 * X - ( X@[-1,0] + X@[0,-1] + X@[1,0] + X@[0,1] ); 
+}
+stencil saturation(vector#2 rgb X){
+  average = ( X.r + X.g + X.b ) / 3.0;
+  std_dev =  sqrt( ( ( X.r - average)*(X.r - average) + (X.b - average)*(X.b - average) + (X.g - average)*(X.g - average) ) / 3.0 );
+  return std_dev;
+}
+stencil well_exposed(vector#2 rgb Y){
+  red_var = (Y.r/255.0) - 0.5;
+  red = exp(-12.5 * red_var * red_var );
+  green_var = (Y.g/255.0) - 0.5;
+  green = exp(-12.5 * green_var * green_var);
+  blue_var = (Y.b/255.0) - 0.5;
+  blue = exp(-12.5 * blue_var * blue_var);
+  return red * green * blue;
+}
+stencil multiply(vector#2 double X, vector#2 double Y, vector#2 double Z){
+  return X * Y * Z ;
+}
+vector compute_weights(vector#2 rgb image){
+  grey = make_grey(image);
+  laplacian = laplacian(grey);
+  saturation = saturation(image);
+  well_exposed = well_exposed(image);
+  return multiply(laplacian,saturation,well_exposed);	
+}
+stencil combine(vector#2 double W1, vector#2 rgb I1, vector#2 double W2, vector#2 rgb I2){
+  sum = W1 + W2;
+  red = ( W1 * I1.r + W2 * I2.r ) / sum;
+  green = ( W1 * I1.g + W2 * I2.g ) / sum;
+  blue = ( W1 * I1.b + W2 * I2.b ) / sum;
+  return struct rgb(red,green,blue);
+}
+parameter M,N;
+vector#2 rgb image1[M,N];
+vector#2 rgb image2[M,N];
+weights1 = compute_weights(image1);
+weights2 = compute_weights(image2);
+return  combine(weights1,image1,weights2,image2);

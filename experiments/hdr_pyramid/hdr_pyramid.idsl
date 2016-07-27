@@ -1,0 +1,204 @@
+//****************************************************************************//
+//* Copyright (c) 2016, NVIDIA CORPORATION. All rights reserved.             *//
+//*                                                                          *//
+//* Redistribution and use in source and binary forms, with or without       *//
+//* modification, are permitted provided that the following conditions       *//
+//* are met:                                                                 *//
+//*  * Redistributions of source code must retain the above copyright        *//
+//*    notice, this list of conditions and the following disclaimer.         *//
+//*  * Redistributions in binary form must reproduce the above copyright     *//
+//*    notice, this list of conditions and the following disclaimer in the   *//
+//*    documentation and/or other materials provided with the distribution.  *//
+//*  * Neither the name of NVIDIA CORPORATION nor the names of its           *//
+//*    contributors may be used to endorse or promote products derived       *//
+//*    from this software without specific prior written permission.         *//
+//*                                                                          *//
+//* THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY     *//
+//* EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE        *//
+//* IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR       *//
+//* PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR        *//
+//* CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,    *//
+//* EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,      *//
+//* PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR       *//
+//* PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY      *//
+//* OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT             *//
+//* (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE    *//
+//* OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.     *//
+//****************************************************************************//
+
+/// This example is obtained from the paper "Exposure Fusion" by Mertens et.al in Pacific Graphics 2007
+
+struct rgb { int8 r ; int8 g ; int8 b ;  }
+stencil downx(vector#2 float X){
+  return  0.0625f * X@[(-2,2),(0,1)] +  0.25f * X@[(-1,2),(0,1)] +  0.375f * X@[(0,2),(0,1)] + 0.25f * X@[(1,2),(0,1)] +  0.0625f * X@[(2,2),(0,1)];
+}
+stencil downy(vector#2 float Y){
+  return 0.0625f * Y@[(0,1),(-2,2)] + 0.25f * Y@[(0,1),(-1,2)] + 0.375f * Y@[(0,1),(0,2)] + 0.25f * Y@[(0,1),(1,2)] + 0.0625f * Y@[(0,1),(2,2)] ;
+}
+vector downsample(vector#2 float X){
+  return downy(downx(X));
+}
+stencil upx_even(vector#2 float X){
+  return X@[-1,0] * 0.3125f + X * 0.625f + X@[1,0] * 0.0625f;
+}
+stencil upx_odd(vector#2 float X){
+  return X@[-1,0] * 0.0625f + X * 0.625f +  X@[1,0] * 0.3125f;
+}
+vector upx(vector#2 float X){
+  return ( @[(0,2),(0,1)] = upx_even(X);
+	   @[(1,2),(0,1)] = upx_odd(X); );
+}
+stencil upy_even(vector#2 float X){
+  return X@[0,-1] * 0.3125f + X * 0.625f + X@[0,1] * 0.0625f;
+}
+stencil upy_odd(vector#2 float X){
+  return X@[0,-1] * 0.0625f + X * 0.625f +  X@[0,1] * 0.3125f ;
+}
+vector upy(vector#2 float X){
+  return ( @[(0,1),(0,2)] = upy_even(X);
+	   @[(0,1),(1,2)] = upy_odd(X); );
+}
+vector upsample(vector#2 float X){
+  return upy(upx(X));
+}
+stencil make_grey(vector#2 rgb X){
+  return (0.02126f * X.r + 0.7152f * X.g + 0.0722f * X.b) / 255;
+}
+stencil laplacian(vector#2 float X){
+  return 4 * X - ( X@[-1,0] + X@[0,-1] + X@[1,0] + X@[0,1] ); 
+}
+stencil saturation(vector#2 rgb X){
+  average = ( X.r + X.g + X.b ) / 3.0f;
+  std_dev =  sqrt( ( ( X.r - average)*(X.r - average) + (X.b - average)*(X.b - average) + (X.g - average)*(X.g - average) ) / 3.0f );
+  return std_dev;
+}
+stencil well_exposed(vector#2 rgb Y){
+  red = exp(-12.5f * (Y.r-0.5f)*(Y.r-0.5f));
+  green = exp(-12.5f * (Y.g-0.5f)*(Y.g-0.5f));
+  blue = exp(-12.5f * (Y.b-0.5f)*(Y.b-0.5f));
+  return red * green * blue;
+}
+stencil multiply(vector#2 float X, vector#2 float Y, vector#2 float Z){
+  return X * Y * Z + 0.001f;
+}
+stencil sum2(vector#2 float X, vector#2 float Y){
+  return (X + Y);
+}
+stencil subtract(vector#2 float X, vector#2 float Y){
+  return X - Y;
+}
+stencil combine(vector#2 float W1, vector#2 float I1, vector#2 float W2, vector#2 float I2, vector#2 float W3, vector#2 float I3, vector#2 float W4, vector#2 float I4 ){
+  sum = W1 + W2 + W3 + W4;	
+  avg = (W1 * I1  + W2 * I2  + W3 * I3  + W4 * I4)/sum ;
+  return avg;
+}
+vector compute_weights(vector#2 rgb image){
+  grey = make_grey(image);
+  laplacian = laplacian(grey);
+  saturation = saturation(image);
+  well_exposed = well_exposed(image);
+  return multiply(laplacian,saturation,well_exposed);
+}
+stencil cast_float(vector#2 int8 X){
+	return cast<float>(X);
+}
+stencil clamp_value(vector#2 float X){
+	clamp_down = ( X < 0 ? 0.0f : X );
+	clamp_up  = ( clamp_down > 255 ? 255.0f : clamp_down);
+	return cast<int8>(clamp_up);
+}
+vector#2 rgb image1[500,752];
+vector#2 rgb image2[500,752];
+vector#2 rgb image3[500,752];
+vector#2 rgb image4[500,752];
+
+weight1_pyramid<0> = compute_weights(image1);
+weight2_pyramid<0> = compute_weights(image2);
+weight3_pyramid<0> = compute_weights(image3);
+weight4_pyramid<0> = compute_weights(image4);
+
+image1_red_gpyr<0> = cast_float(image1.r);
+image1_green_gpyr<0> = cast_float(image1.g);
+image1_blue_gpyr<0> = cast_float(image1.b);
+
+image2_red_gpyr<0> = cast_float(image2.r);
+image2_green_gpyr<0> = cast_float(image2.g);
+image2_blue_gpyr<0> = cast_float(image2.b);
+
+image3_red_gpyr<0> = cast_float(image3.r);
+image3_green_gpyr<0> = cast_float(image3.g);
+image3_blue_gpyr<0> = cast_float(image3.b);
+
+image4_red_gpyr<0> = cast_float(image4.r);
+image4_green_gpyr<0> = cast_float(image4.g);
+image4_blue_gpyr<0> = cast_float(image4.b);
+
+for i = 1..2
+  weight1_pyramid<i> = downsample(weight1_pyramid<i-1>);
+
+  image1_red_gpyr<i> = downsample(image1_red_gpyr<i-1>);
+  image1_red_lpyr<i> = subtract(image1_red_gpyr<i-1>,upsample(image1_red_gpyr<i>));
+
+  image1_green_gpyr<i> = downsample(image1_green_gpyr<i-1>);
+  image1_green_lpyr<i> = subtract(image1_green_gpyr<i-1>,upsample(image1_green_gpyr<i>));
+
+  image1_blue_gpyr<i> = downsample(image1_blue_gpyr<i-1>);
+  image1_blue_lpyr<i> = subtract(image1_blue_gpyr<i-1>,upsample(image1_blue_gpyr<i>));
+
+
+  weight2_pyramid<i> = downsample(weight2_pyramid<i-1>);
+
+  image2_red_gpyr<i> = downsample(image2_red_gpyr<i-1>);
+  image2_red_lpyr<i> = subtract(image2_red_gpyr<i-1>,upsample(image2_red_gpyr<i>));
+
+  image2_green_gpyr<i> = downsample(image2_green_gpyr<i-1>);
+  image2_green_lpyr<i> = subtract(image2_green_gpyr<i-1>,upsample(image2_green_gpyr<i>));
+
+  image2_blue_gpyr<i> = downsample(image2_blue_gpyr<i-1>);
+  image2_blue_lpyr<i> = subtract(image2_blue_gpyr<i-1>,upsample(image2_blue_gpyr<i>));
+
+
+  weight3_pyramid<i> = downsample(weight3_pyramid<i-1>);
+
+  image3_red_gpyr<i> = downsample(image3_red_gpyr<i-1>);
+  image3_red_lpyr<i> = subtract(image3_red_gpyr<i-1>,upsample(image3_red_gpyr<i>));
+
+  image3_green_gpyr<i> = downsample(image3_green_gpyr<i-1>);
+  image3_green_lpyr<i> = subtract(image3_green_gpyr<i-1>,upsample(image3_green_gpyr<i>));
+
+  image3_blue_gpyr<i> = downsample(image3_blue_gpyr<i-1>);
+  image3_blue_lpyr<i> = subtract(image3_blue_gpyr<i-1>,upsample(image3_blue_gpyr<i>));
+
+
+  weight4_pyramid<i> = downsample(weight4_pyramid<i-1>);
+
+  image4_red_gpyr<i> = downsample(image4_red_gpyr<i-1>);
+  image4_red_lpyr<i> = subtract(image4_red_gpyr<i-1>,upsample(image4_red_gpyr<i>));
+
+  image4_green_gpyr<i> = downsample(image4_green_gpyr<i-1>);
+  image4_green_lpyr<i> = subtract(image4_green_gpyr<i-1>,upsample(image4_green_gpyr<i>));
+
+  image4_blue_gpyr<i> = downsample(image4_blue_gpyr<i-1>);
+  image4_blue_lpyr<i> = subtract(image4_blue_gpyr<i-1>,upsample(image4_blue_gpyr<i>));
+
+  out_red_lpyr<i> = combine(weight1_pyramid<i-1>,image1_red_lpyr<i>,weight2_pyramid<i-1>,image2_red_lpyr<i>,weight3_pyramid<i-1>,image3_red_lpyr<i>,weight4_pyramid<i-1>,image4_red_lpyr<i>);
+
+  out_green_lpyr<i> = combine(weight1_pyramid<i-1>,image1_green_lpyr<i>,weight2_pyramid<i-1>,image2_green_lpyr<i>,weight3_pyramid<i-1>,image3_green_lpyr<i>,weight4_pyramid<i-1>,image4_green_lpyr<i> );
+
+  out_blue_lpyr<i> = combine(weight1_pyramid<i-1>,image1_blue_lpyr<i>,weight2_pyramid<i-1>,image2_blue_lpyr<i>,weight3_pyramid<i-1>,image3_blue_lpyr<i>,weight4_pyramid<i-1>,image4_blue_lpyr<i>);
+
+endfor
+
+out_red_gpyr<2> = combine(weight1_pyramid<2>,image1_red_gpyr<2>,weight2_pyramid<2>,image2_red_gpyr<2>,weight3_pyramid<2>,image3_red_gpyr<2>,weight4_pyramid<2>,image4_red_gpyr<2>);
+out_green_gpyr<2> = combine(weight1_pyramid<2>,image1_green_gpyr<2>,weight2_pyramid<2>,image2_green_gpyr<2>,weight3_pyramid<2>,image3_green_gpyr<2>,weight4_pyramid<2>,image4_green_gpyr<2>);
+out_blue_gpyr<2> = combine(weight1_pyramid<2>,image1_blue_gpyr<2>,weight2_pyramid<2>,image2_blue_gpyr<2>,weight3_pyramid<2>,image3_blue_gpyr<2>,weight4_pyramid<2>,image4_blue_gpyr<2>);
+
+for j = 1..0
+    out_red_gpyr<j> = sum2(out_red_lpyr<j+1>,upsample(out_red_gpyr<j+1>));
+    out_green_gpyr<j> = sum2(out_green_lpyr<j+1>,upsample(out_green_gpyr<j+1>));
+    out_blue_gpyr<j> = sum2(out_blue_lpyr<j+1>,upsample(out_blue_gpyr<j+1>));
+endfor
+
+
+output = struct rgb(clamp_value(out_red_gpyr<0>),clamp_value(out_green_gpyr<0>),clamp_value(out_blue_gpyr<0>));
+return output;

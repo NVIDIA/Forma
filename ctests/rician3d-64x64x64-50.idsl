@@ -1,0 +1,108 @@
+//****************************************************************************//
+//* Copyright (c) 2016, NVIDIA CORPORATION. All rights reserved.             *//
+//*                                                                          *//
+//* Redistribution and use in source and binary forms, with or without       *//
+//* modification, are permitted provided that the following conditions       *//
+//* are met:                                                                 *//
+//*  * Redistributions of source code must retain the above copyright        *//
+//*    notice, this list of conditions and the following disclaimer.         *//
+//*  * Redistributions in binary form must reproduce the above copyright     *//
+//*    notice, this list of conditions and the following disclaimer in the   *//
+//*    documentation and/or other materials provided with the distribution.  *//
+//*  * Neither the name of NVIDIA CORPORATION nor the names of its           *//
+//*    contributors may be used to endorse or promote products derived       *//
+//*    from this software without specific prior written permission.         *//
+//*                                                                          *//
+//* THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY     *//
+//* EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE        *//
+//* IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR       *//
+//* PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR        *//
+//* CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,    *//
+//* EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,      *//
+//* PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR       *//
+//* PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY      *//
+//* OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT             *//
+//* (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE    *//
+//* OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.     *//
+//****************************************************************************//
+
+// INPUT
+// u: 3-d array  (input value is equal to f)
+// f: 3-d array  (constant, value does not change)
+
+// TEMPORARIES
+// g: 3-d array
+// r: Can be 3-d array if array-expansion is used
+
+// OUTPUT
+// u
+
+// PARAMETERS
+// T: Max iterations
+// DT: Constant (5.0)
+// EPSILON: Constant (1.3e-20)
+// TOL: Constant (0.00001)
+// sigma: Program-defined (float)
+// lambda: Program-defined (float)
+// sigma2: sigma*sigma
+
+// NOTES:
+// u is live out
+// f is live in
+// g is neither live in nor live out
+
+stencil init_g() {
+  return 0.0f;
+}
+
+stencil approx_g(vector#3 float u, float epsilon) {
+  return 1.0f / sqrtf(epsilon +
+       (u@[0, 0, 0] - u@[ 0,  1,  0]) * (u@[0, 0, 0] - u@[ 0,  1,  0]) +
+                           (u@[0, 0, 0] - u@[ 0, -1,  0]) * (u@[0, 0, 0] - u@[ 0, -1,  0]) +
+                           (u@[0, 0, 0] - u@[ 0,  0,  1]) * (u@[0, 0, 0] - u@[ 0,  0,  1]) +
+                           (u@[0, 0, 0] - u@[ 0,  0, -1]) * (u@[0, 0, 0] - u@[ 0,  0, -1]) +
+                           (u@[0, 0, 0] - u@[ 1,  0,  0]) * (u@[0, 0, 0] - u@[ 1,  0,  0]) +
+                           (u@[0, 0, 0] - u@[-1,  0,  0]) * (u@[0, 0, 0] - u@[-1,  0,  0]) );
+}
+
+
+stencil update_u(vector#3 float g, vector#3 float f, vector#3 float u, float sigma, float lambda, float DT) {
+  r = u@[0, 0, 0]*f@[0, 0, 0]/(sigma*sigma);
+  r2 = ( r*(2.38944f + r*(0.950037f + r)) )
+         / ( 4.65314f + r*(2.57541f + r*(1.48937f + r)) );
+  gamma = lambda / (sigma*sigma);
+  return (u@[0, 0, 0] +
+                     DT*(u@[ 0,  1,  0]*g@[ 0,  1,  0] +
+                         u@[ 0, -1,  0]*g@[ 0, -1,  0] +
+                         u@[ 0,  0,  1]*g@[ 0,  0,  1] +
+                         u@[ 0,  0, -1]*g@[ 0,  0, -1] +
+                         u@[ 1,  0,  0]*g@[ 1,  0,  0] +
+                         u@[-1,  0,  0]*g@[-1,  0,  0] +
+                         gamma*f@[0, 0, 0]*r2))
+                    *
+                     (1.0f + DT*g@[ 0,  1,  0] +
+ 		               g@[ 0, -1,  0] +
+                               g@[ 0,  0,  1] + 
+                               g@[ 0,  0, -1] +
+                               g@[ 1,  0,  0] +
+                               g@[-1,  0,  0] +
+                               gamma);
+}
+
+vector#3 float f[64, 64, 64];  // LIVE IN
+
+u<0> = f;
+// T does not strictly need to be parametric, but it is more general
+for t = 1..50
+  g<t> = approx_g(u<t-1>, 0.0001f);
+  u<t> = update_u(g<t>,f,u<t-1>,0.05f,0.065f,5.0f);
+endfor
+
+// I would like to write the following termination condition:
+// while (max(u<t>-u<t-1>) < TOL);  // check every 10
+
+// max(vector#N) returns the maximum value across all inputs
+// In this case, u<t>-u<t-1> for all (i, j, k) in u.
+// How do you write such a reduction in idsl?
+
+return u<2>;

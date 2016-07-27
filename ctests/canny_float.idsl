@@ -1,0 +1,53 @@
+//****************************************************************************//
+//* Copyright (c) 2016, NVIDIA CORPORATION. All rights reserved.             *//
+//*                                                                          *//
+//* Redistribution and use in source and binary forms, with or without       *//
+//* modification, are permitted provided that the following conditions       *//
+//* are met:                                                                 *//
+//*  * Redistributions of source code must retain the above copyright        *//
+//*    notice, this list of conditions and the following disclaimer.         *//
+//*  * Redistributions in binary form must reproduce the above copyright     *//
+//*    notice, this list of conditions and the following disclaimer in the   *//
+//*    documentation and/or other materials provided with the distribution.  *//
+//*  * Neither the name of NVIDIA CORPORATION nor the names of its           *//
+//*    contributors may be used to endorse or promote products derived       *//
+//*    from this software without specific prior written permission.         *//
+//*                                                                          *//
+//* THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY     *//
+//* EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE        *//
+//* IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR       *//
+//* PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR        *//
+//* CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,    *//
+//* EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,      *//
+//* PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR       *//
+//* PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY      *//
+//* OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT             *//
+//* (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE    *//
+//* OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.     *//
+//****************************************************************************//
+stencil gaussian(vector#2 float X){
+	return (2 * X@[-2,-2] + 4 * X@[-2,-1] + 5 * X@[-2,0] + 4 * X@[-2,1] + 2 * X@[-2,2] + 4 * X@[-1,-2] + 9 * X@[-1,-1] + 12 * X@[-1,0] + 9 * X@[-1,1] + 4 * X@[-1,2] + 5 * X@[0,-2] + 12 * X@[0,-1] + 15 * X@[0,0] + 12 * X@[0,1] + 5 * X@[0,2] + 4 * X@[1,-2] + 9 * X@[1,-1] + 12 * X@[1,0] + 9 * X@[1,1] + 4 * X@[1,2] + 2 * X@[2,-2] + 4 * X@[2,-1] + 5 * X@[2,0] + 4 * X@[2,1] + 2 * X@[2,2] ) / 159;
+}
+stencil gradientx(vector#2 float X){
+	filter =  X@[-1,1] - X@[-1,-1] + 2*(X@[0,1] - X@[0,-1]) + X@[1,1] - X@[1,-1];
+	return filter;
+}
+stencil gradienty(vector#2 float X){
+	filter = X@[-1,-1] - X@[1,-1] + 2*(X@[-1,0] - X@[1,0]) + X@[-1,1] - X@[1,1];
+	return filter;
+}
+stencil magnitude(vector#2 float X, vector#2 float Y){
+	return absd(X) + absd(Y);
+}
+stencil suppress(vector#2 float gx, vector#2 float gy, vector#2 float mag){
+	theta = ( gx == 0 ? ( 3.14156f / 2 ) :  atan(gy/gx)) ;
+	result = ( theta < -3 * 3.14156f / 8 ? ( mag > max(mag@[-1,0],mag@[1,0]) ? mag : 0.0f ) : ( theta < -3.14156f / 8 ? ( mag > max(mag@[1,1],mag@[-1,-1]) ? mag : 0.0f ) : ( theta < 3.14156f / 8 ? ( mag > max(mag@[0,1],mag@[0,-1]) ? mag : 0.0f ) : ( theta < 3 * 3.14156f / 8 ? ( mag > max(mag@[-1,1],mag@[1,-1]) ? mag : 0.0f ) : ( mag > max(mag@[-1,0],mag@[0,1]) ? mag : 0.0f ) ) ) ) ); 
+	return result;
+}
+parameter N,M;
+vector#2 float input[N,M];
+blurred = gaussian(input);
+gx = gradientx(blurred);
+gy = gradienty(blurred);
+mag = magnitude(gx,gy);
+return suppress(gx,gy,mag);

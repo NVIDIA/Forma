@@ -1,0 +1,20 @@
+Forma is a DSL for image processing developed in the CUDA Compiler Team, NVIDIA.
+
+Relevant Papers :
+
+"Forma: a DSL for image processing applications to target GPUs and multi-core
+CPUs", Ravishankar M., Holewinski J., and Grover V. Proceedings of the 8th
+Workshop on General Purpose Processing using GPUs (GPGPU-8). February 7th, 2015,
+San Fransisco, USA.
+
+Prerequisites:
+
+1) Bison : Should be in PATH
+2) Flex : Should be in PATH
+3) CUDA >= 7.5
+4) C/C++ Compiler
+5) LLVM-3.8 (Optional)
+
+To Build Forma on Linux run the script build.sh
+
+To report issues please contact Mahesh Ravishankar (mravishankar@nvidia.com)

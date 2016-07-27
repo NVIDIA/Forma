@@ -1,0 +1,88 @@
+//****************************************************************************//
+//* Copyright (c) 2016, NVIDIA CORPORATION. All rights reserved.             *//
+//*                                                                          *//
+//* Redistribution and use in source and binary forms, with or without       *//
+//* modification, are permitted provided that the following conditions       *//
+//* are met:                                                                 *//
+//*  * Redistributions of source code must retain the above copyright        *//
+//*    notice, this list of conditions and the following disclaimer.         *//
+//*  * Redistributions in binary form must reproduce the above copyright     *//
+//*    notice, this list of conditions and the following disclaimer in the   *//
+//*    documentation and/or other materials provided with the distribution.  *//
+//*  * Neither the name of NVIDIA CORPORATION nor the names of its           *//
+//*    contributors may be used to endorse or promote products derived       *//
+//*    from this software without specific prior written permission.         *//
+//*                                                                          *//
+//* THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY     *//
+//* EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE        *//
+//* IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR       *//
+//* PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR        *//
+//* CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,    *//
+//* EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,      *//
+//* PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR       *//
+//* PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY      *//
+//* OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT             *//
+//* (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE    *//
+//* OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.     *//
+//****************************************************************************//
+struct rgba{ int8 r; int8 g; int8 b; int8 a; }
+struct rgb{int8 r; int8 g; int8 b; }       
+stencil downx(vector#2 int8 X){
+  return  cast<int8>(0.0625f * X@[(-2,2),(0,1)] +  0.25f * X@[(-1,2),(0,1)] +  0.375f * X@[(0,2),(0,1)] + 0.25f * X@[(1,2),(0,1)] +  0.0625f * X@[(2,2),(0,1)]);
+}
+stencil downy(vector#2 int8 Y){
+  return cast<int8>(0.0625f * Y@[(0,1),(-2,2)] + 0.25f * Y@[(0,1),(-1,2)] + 0.375f * Y@[(0,1),(0,2)] + 0.25f * Y@[(0,1),(1,2)] + 0.0625f * Y@[(0,1),(2,2)]) ;
+}
+vector downsample(vector#2 int8 X){
+       return downy(downx(X));
+}
+stencil upx_even(vector#2 int8 X){
+  return cast<int8>(X@[-1,0] * 0.3125f + X * 0.625f + X@[1,0] * 0.0625f);
+}
+stencil upx_odd(vector#2 int8 X){
+  return cast<int8>(X@[-1,0] * 0.0625f + X * 0.625f +  X@[1,0] * 0.3125f);
+}
+vector upx(vector#2 int8 X){
+       return ( @[(0,2),(0,1)] = upx_even(X);
+                @[(1,2),(0,1)] = upx_odd(X); );
+}
+stencil upy_even(vector#2 int8 X){
+  return cast<int8>(X@[0,-1] * 0.3125f + X * 0.625f + X@[0,1] * 0.0625f);
+}
+stencil upy_odd(vector#2 int8 X){
+  return cast<int8>(X@[0,-1] * 0.0625f + X * 0.625f +  X@[0,1] * 0.3125f);
+}
+vector upy(vector#2 int8 Y){
+       return ( @[(0,1),(0,2)] = upy_even(Y);
+                @[(0,1),(1,2)] = upy_odd(Y); );
+}
+vector upsample(vector#2 int8 X){
+       return upy(upx(X));
+}
+stencil laplacian(vector#2 int8 X, vector#2 int8 Y){
+	return cast<int8>(X - Y);
+}
+stencil sum(vector#2 int8 X, vector#2 int8 Y){
+	return cast<int8>(X+Y);
+}
+vector#2 rgba input[2048,2048];
+r_gpyramid<0> = input.r;
+g_gpyramid<0> = input.g;
+b_gpyramid<0> = input.b;
+for i = 1..4
+    r_gpyramid<i> = downsample(r_gpyramid<i-1>);
+    r_lpyramid<i> = laplacian(r_gpyramid<i-1>,upsample(r_gpyramid<i>));
+    g_gpyramid<i> = downsample(g_gpyramid<i-1>);
+    g_lpyramid<i> = laplacian(g_gpyramid<i-1>,upsample(g_gpyramid<i>));
+    b_gpyramid<i> = downsample(b_gpyramid<i-1>);
+    b_lpyramid<i> = laplacian(b_gpyramid<i-1>,upsample(b_gpyramid<i>));
+endfor
+r_outpyramid<4> = r_gpyramid<4>;
+g_outpyramid<4> = g_gpyramid<4>;
+b_outpyramid<4> = b_gpyramid<4>;
+for j = 3..0
+    r_outpyramid<j> = sum(upsample(r_outpyramid<j+1>),r_lpyramid<j+1>);
+    g_outpyramid<j> = sum(upsample(g_outpyramid<j+1>),g_lpyramid<j+1>);
+    b_outpyramid<j> = sum(upsample(b_outpyramid<j+1>),b_lpyramid<j+1>);
+endfor
+return struct rgb(r_outpyramid<0>,g_outpyramid<0>,b_outpyramid<0>);
